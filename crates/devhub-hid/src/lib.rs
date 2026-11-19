@@ -20,6 +20,9 @@ use std::sync::{Arc, Mutex};
 /// ATK 系ドライバ。診断 example (atkread) からも使うので公開。
 #[doc(hidden)]
 pub mod atk;
+/// Logitech HID++ 2.0。診断 example (hidppread) からも使うので公開。
+#[doc(hidden)]
+pub mod hidpp;
 #[doc(hidden)]
 pub mod lamzu;
 #[allow(dead_code)]
@@ -53,6 +56,7 @@ fn driver_ready(kind: DriverKind) -> bool {
         DriverKind::Walkplay => true,
         DriverKind::Atk => true,
         DriverKind::Lamzu => true,
+        DriverKind::Hidpp => true,
         DriverKind::Unsupported => false,
     }
 }
@@ -287,11 +291,56 @@ impl RealHub {
             DriverKind::Walkplay => Arc::new(walkplay::open(dev, info)?),
             DriverKind::Atk => Arc::new(atk::open(dev, info, events)?),
             DriverKind::Lamzu => Arc::new(lamzu::open(dev, info, events)?),
+            DriverKind::Hidpp => {
+                let short = self.open_hidpp_short(id, spec);
+                Arc::new(hidpp::open(
+                    dev,
+                    short,
+                    info,
+                    events,
+                    self.detected.clone(),
+                )?)
+            }
             DriverKind::Unsupported => {
                 return Err(HubError::NotImplemented("このデバイスのドライバ"))
             }
         };
         Ok(drv)
+    }
+}
+
+impl RealHub {
+    /// HID++ の short コレクション (FF00:01) を開く。registry は long (FF00:02) を
+    /// 登録しているので、同じ受信機の兄弟を探す。Windows のパスは `&col02` と
+    /// `&col01` だけが違うので、まずそれで引き、無ければ同じ VID/PID の FF00:01。
+    fn open_hidpp_short(
+        &self,
+        id: &DeviceId,
+        spec: &registry::KnownDevice,
+    ) -> Option<hidapi::HidDevice> {
+        let long = self
+            .paths
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id.0)?
+            .to_string_lossy()
+            .to_lowercase();
+        let want = long.replace("&col02", "&col01");
+        let api = self.api.lock().unwrap_or_else(|p| p.into_inner());
+        let candidates: Vec<_> = api
+            .device_list()
+            .filter(|d| {
+                d.vendor_id() == spec.vid
+                    && d.product_id() == spec.pid
+                    && d.usage_page() == 0xFF00
+                    && d.usage() == 0x0001
+            })
+            .collect();
+        let pick = candidates
+            .iter()
+            .find(|d| d.path().to_string_lossy().to_lowercase() == want)
+            .or(candidates.first())?;
+        pick.open_device(&api).ok()
     }
 }
 

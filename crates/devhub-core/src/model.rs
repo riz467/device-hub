@@ -72,6 +72,8 @@ pub enum DriverKind {
     Atk,
     /// www.lamzu.net / Aurora 系 (64B feature report、if2 FFFF:00)。
     Lamzu,
+    /// Logitech HID++ 2.0 (G HUB 系。LIGHTSPEED 受信機・有線、FF00:02 long report)。
+    Hidpp,
     /// 未割り当て (検出だけできる)。
     Unsupported,
 }

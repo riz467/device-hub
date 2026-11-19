@@ -1104,3 +1104,62 @@ get/set は cmd が +0x80/同一値の関係。`devID` はプロファイル番�
 - 公式の日本語表示名: 移動同期 / 直線補正 / リップル / LOD / ガラスモード / 20K FPS / 競技モード / 角度調整 /
   スリープ時間 / スクロールBhop / ホイール応答時間 / デバウンスタイム / 高速トリガー / ドングルLED (信号) /
   プロファイルをリセット / 完全初期化。X-Y軸分離は DPI タブの X/Y 切り替えで扱う (設定行には出さない)。
+
+---
+
+## 6. Logitech HID++ 2.0 (G HUB 置き換え) — PRO X SUPERLIGHT 実機検証済み
+
+出典: 公開されている HID++ 2.0 の知見 (Solaar / libratbag と同じ) + 実機での読み出し。
+G HUB 本体は解析していない。ドライバ: `crates/devhub-hid/src/hidpp.rs`、検証: `--example hidppread`。
+
+### 6.1 識別 (2026-11-20 実機)
+
+| 項目 | 値 |
+|---|---|
+| 受信機 | 046D:C547 "USB Receiver" (LIGHTSPEED)、受信機 FW 04.02.B0009 |
+| HID++ IF | if2: FF00/01 = short (report 0x10, 7B)、FF00/02 = long (report 0x11, 20B) — Windows では別ハンドル |
+| ペア先 | スロット 1、wpid **0x4093**、名前 "PRO X" (0x0005 では "PRO X Wireless")、種別 2 = mouse |
+| 本体 | HID++ 4.2、FW MPM25.01.B0018 (ブートローダ BL125.01)、有線 PID 0xC094 (0x0003 の modelIds から) |
+
+受信機レジスタ (HID++ 1.0、short で要求): `[10 FF 83 B5 20+n 00 00]` → long 応答の
+`r[7..9]` が wpid、`r[11]&0x0F` が種別。`0x40+n` で名前。`[10 FF 81 F1 01/02 ..]` で受信機 FW。
+未ペアのスロットは short `[10 FF 8F 83 B5 09 ..]`。
+
+マウスが寝ていると、デバイス 1 への要求には**何も返らない** (タイムアウト)。
+未ペア (2..6) は short の `8F` エラー 8 が返る。動かせば次の要求から応答する。
+
+### 6.2 feature 一覧 (PRO X SUPERLIGHT)
+
+0x0001 FeatureSet / 0x0003 FwVersion / 0x0005 Name / 0x1D4B / 0x0020 ConfigChange /
+**0x1004 UnifiedBattery** / 0x8070 (hidden) / **0x8100 OnboardProfiles** / 0x8110 MouseButtonSpy /
+**0x8060 ReportRate** / **0x2201 AdjustableDpi** / 0x1500 / ほか hidden・engineering (0x18xx, 0x1E00 等 — 触らない)。
+
+- 0x1004 fn1: `[残量%, レベル, 充電状態, 外部電源]` — 実機 60%。
+- 0x2201 fn1(センサー 0): `[00, 00 64, E0 32, 64 00, 00 00]` = 100..25600、刻み 0x32 = 50。fn2 現在値、fn3 設定。
+- 0x8060 fn0: ビットマップ 0x8B → 1/2/4/8 ms = 1000/500/250/125 Hz。fn1 現在、fn2 設定。
+
+### 6.3 オンボードプロファイル (0x8100)
+
+getInfo: `01 04 01 05 01 05 10 00FF 0A 04` = memory model 1, **format 4**, macro format 1,
+プロファイル 5 (ROM 1), ボタン 5, セクタ 16 個 × **255B**。
+関数: 0 info / 1 setMode / 2 getMode (1=onboard, 2=host) / 3 setProfile / 4 getProfile (セクタ番号) /
+5 memRead(sector, offset) 16B / 6 memAddrWrite(sector, offset, len) / 7 memWrite 16B / 8 memWriteEnd /
+11 getDpiIndex / 12 setDpiIndex。
+
+- セクタ 0x0000 = ディレクトリ: 4B × n `[sectorHi, sectorLo, enabled, FF]`。実機は 0x0001 だけ有効。
+- セクタ 0x0001.. = ユーザープロファイル、0x0101.. = ROM 既定 (CRC 欄は FFFF)。
+- 末尾 2B が CRC-CCITT (init 0xFFFF, poly 0x1021, BE)。実機 3 セクタで一致を確認。
+
+プロファイル format 4 のレイアウトは `hidpp.rs` の `profile` モジュールの表を参照。
+実機ユーザープロファイル: 1ms (1000Hz)、DPI 800 の 1 段、ボタン `80 01 00 01/02/04/08/10`、
+名前 "PROFILE_NAME_DEFAULT"。ROM 既定: 400/800/1600/3200/6400、既定 index 1。
+
+ボタン 4B: `80 01 mask` マウス / `80 02 mods key` キー / `80 03 usage` コンシューマ /
+`90 fn 00 data` 機能 (3/4/5 = DPI 上/下/循環、7 = DPI シフト、0x10/0x11 = スクロール下/上、1/2 = チルト)。
+
+### 6.4 書き込み (実機検証済み 2026-11-20)
+
+`memAddrWrite(sector, 0, 255)` → `memWrite` × 16 → `memWriteEnd` → 読み戻し照合 → `setProfile` で再読込。
+ポーリング 500Hz・DPI 3 段・ボタン→キー の往復と、元への復元 (セクタがバイト単位で一致) を確認。
+書き込み前の元セクタは `%APPDATA%\DeviceHub\hidpp-backup\<wpid>-sector<n>-<unix>.bin` に保存する。
+G HUB の常駐 (lghub_agent) と同時に書かないこと (オンボードメモリを取り合う)。

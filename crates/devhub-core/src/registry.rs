@@ -52,6 +52,24 @@ const fn mf(
     }
 }
 
+/// Logitech HID++ 2.0 機 (long report コレクション FF00:02)。
+/// 名前・model は仮 — ドライバがペア先 wpid / PID から確定する。
+const fn logi(pid: u16, name: &'static str, transport: Transport, verified: bool) -> KnownDevice {
+    KnownDevice {
+        vid: 0x046D,
+        pid,
+        usage_page: Some(0xFF00),
+        usage: Some(0x02),
+        kind: DeviceKind::Mouse,
+        vendor: "Logitech",
+        model: "logi-hidpp",
+        name,
+        transport,
+        driver: DriverKind::Hidpp,
+        verified,
+    }
+}
+
 /// 対応表。新デバイスはここへ追加する。
 ///
 /// mouse.fit の PID は `https://www.mouse.fit/Config/env-models.json` (2026-11 取得) の
@@ -251,6 +269,17 @@ pub const KNOWN: &[KnownDevice] = &[
         driver: DriverKind::Lamzu,
         verified: false,
     },
+    // ---------------------------------------------------------------- マウス (Logitech HID++)
+    // LIGHTSPEED 受信機 046D:C547 — 実機列挙: if2 FF00/01 (short) と FF00/02 (long)。
+    // long を登録し、short はドライバが兄弟コレクションとして開く。
+    // ペア先 (wpid 4093 = PRO X SUPERLIGHT) は受信機レジスタ 0xB5 で確定する。
+    logi(0xC547, "PRO X SUPERLIGHT", Transport::Wireless24G, true),
+    // 同系の受信機 (PRO Wireless / SUPERLIGHT 2 同梱) — 実機未確認。
+    logi(0xC539, "Logitech LIGHTSPEED", Transport::Wireless24G, false),
+    logi(0xC54D, "PRO X SUPERLIGHT 2", Transport::Wireless24G, false),
+    // ケーブル直結 (HID++ のデバイス番号 0xFF) — 実機未確認。
+    logi(0xC094, "PRO X SUPERLIGHT", Transport::Wired, false),
+    logi(0xC088, "PRO Wireless", Transport::Wired, false),
     // ATLANTIS MINI V2 用の 8K 受信機 (公式 _8KDongle=0054)。ペア先は GetDevicePID で判定。
     KnownDevice {
         vid: 0x37B0,

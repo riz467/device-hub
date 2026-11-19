@@ -7,6 +7,9 @@
 //! 環境変数:
 //!   DEVHUB_DEMO=1  常にデモデバイス
 //!   DEVHUB_FAST=1  GPU ガラスを切る (フォールバック確認)
+//!
+//! 引数:
+//!   --minimized    最小化で起動 (ログイン時の自動起動用。scripts/install-autostart.ps1)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -70,10 +73,13 @@ fn main() {
                 tb.title = Some("Device HUB".into());
             }
 
-            gpui_kit::open_window(options, cx, |window, cx| {
+            let (handle, _shell) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| Shell::new(window, cx))
             })
             .expect("failed to open window");
+            if std::env::args().any(|a| a == "--minimized") {
+                let _ = handle.update(cx, |_, window, _| window.minimize_window());
+            }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
