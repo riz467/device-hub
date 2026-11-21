@@ -17,7 +17,7 @@
 //! 変更は `proc_pending` に積み、受理可能になってから drain する — 無言で消えない。
 
 use crate::app::Shell;
-use crate::prefs::ProcRule;
+use crate::prefs::{PointerMode, ProcRule};
 use devhub_core::{Change, DeviceId};
 use gpui_kit::prelude::*;
 
@@ -156,6 +156,16 @@ pub fn running_apps() -> Vec<(String, String)> {
 fn rule_matches(rule: &ProcRule, fg: &str) -> bool {
     let pat = rule.process.trim().to_lowercase();
     !pat.is_empty() && fg.contains(&pat)
+}
+
+/// 前面 exe に対して求められる Windows のポインター設定。
+/// 有効 & マッチするルールのうち `Keep` 以外で、下のルールほど優先。None = 元のまま。
+fn pointer_want(rules: &[ProcRule], fg: &str) -> Option<PointerMode> {
+    rules
+        .iter()
+        .filter(|r| r.enabled && r.pointer != PointerMode::Keep && rule_matches(r, fg))
+        .map(|r| r.pointer)
+        .next_back()
 }
 
 /// ルールの識別キー (index ではなく内容で持つ — 削除/並び替えに強い)。
@@ -427,6 +437,9 @@ impl Shell {
                     cx.notify();
                 }
             }
+            if crate::pointer::mode().is_some() && crate::pointer::release() {
+                self.toast("ポインター設定を元に戻しました (ルール解除)", false, cx);
+            }
             self.proc_fg = None;
             return;
         }
@@ -464,11 +477,32 @@ impl Shell {
                 msgs.push(format!("適用「{name}」{}", detail(res)));
             }
         }
+        // Windows のポインター (加速/速度)。デバイスと無関係に、前面の間だけ上書きする。
+        let mut pointer_changed = false;
+        match pointer_want(&rules, &fg) {
+            Some(m) if crate::pointer::mode() != Some(m) => {
+                pointer_changed = true;
+                if crate::pointer::engage(m) {
+                    msgs.push(format!("ポインター: {}", m.label()));
+                } else {
+                    msgs.push("ポインター設定を変更できませんでした".into());
+                }
+            }
+            None if crate::pointer::mode().is_some() => {
+                pointer_changed = true;
+                if crate::pointer::release() {
+                    msgs.push("ポインター: 元の設定に戻しました".into());
+                } else {
+                    msgs.push("ポインター設定を戻せませんでした".into());
+                }
+            }
+            _ => {}
+        }
         self.proc_states = ev.now;
         if !msgs.is_empty() {
             self.toast(format!("{} — {fg}", msgs.join(" → ")), false, cx);
         }
-        if changed {
+        if changed || pointer_changed {
             cx.notify();
         }
     }
@@ -494,6 +528,7 @@ mod tests {
             on_fg: "fps".into(),
             on_leave: String::new(),
             enabled: true,
+            pointer: PointerMode::Keep,
         }
     }
 
@@ -582,6 +617,7 @@ mod tests {
             on_fg: on_fg.into(),
             on_leave: on_leave.into(),
             enabled: true,
+            pointer: PointerMode::Keep,
         }
     }
 
@@ -665,5 +701,53 @@ mod tests {
         let ev = eval_rules(&rules, "valorant.exe", &Default::default());
         let ev = eval_rules(&rules, "chrome.exe", &ev.now);
         assert!(ev.leaves.is_empty());
+    }
+
+    #[test]
+    fn pointer_want_follows_foreground_and_last_rule_wins() {
+        let mut lol = rule("league of legends");
+        lol.on_fg = String::new();
+        lol.device = String::new();
+        lol.pointer = PointerMode::AccelOff;
+        let mut lol_raw = lol.clone();
+        lol_raw.pointer = PointerMode::Raw;
+        let other = rule("valorant");
+        // 前面が LoL の間だけ。
+        assert_eq!(
+            pointer_want(&[lol.clone()], "league of legends.exe"),
+            Some(PointerMode::AccelOff)
+        );
+        assert_eq!(pointer_want(&[lol.clone()], "leagueclientux.exe"), None);
+        assert_eq!(pointer_want(&[lol.clone()], "explorer.exe"), None);
+        // ポインターを変えないルールは関与しない。下のルールほど優先。
+        assert_eq!(
+            pointer_want(&[lol.clone(), other, lol_raw], "league of legends.exe"),
+            Some(PointerMode::Raw)
+        );
+        // 無効化したら元に戻す側 (None)。
+        lol.enabled = false;
+        assert_eq!(pointer_want(&[lol], "league of legends.exe"), None);
+    }
+
+    #[test]
+    fn pointer_only_rule_applies_no_profiles() {
+        let mut lol = rule("league of legends");
+        lol.on_fg = String::new();
+        lol.device = String::new();
+        lol.pointer = PointerMode::AccelOff;
+        let ev = eval_rules(&[lol.clone()], "league of legends.exe", &Default::default());
+        assert!(ev.enters.is_empty() && ev.leaves.is_empty());
+        assert_eq!(ev.now.len(), 1); // 「適用中」表示のために状態は持つ。
+        let ev = eval_rules(&[lol], "explorer.exe", &ev.now);
+        assert!(ev.enters.is_empty() && ev.leaves.is_empty() && ev.now.is_empty());
+    }
+
+    #[test]
+    fn old_prefs_without_pointer_field_load_as_keep() {
+        let r: ProcRule = serde_json::from_str(
+            r#"{"process":"valorant","device":"dev","on_fg":"fps","on_leave":"","enabled":true}"#,
+        )
+        .unwrap();
+        assert_eq!(r.pointer, PointerMode::Keep);
     }
 }

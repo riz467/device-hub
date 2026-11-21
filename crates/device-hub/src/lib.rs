@@ -21,6 +21,7 @@ pub mod motion;
 pub mod overlay;
 pub mod pages;
 pub mod palette;
+pub mod pointer;
 pub mod prefs;
 pub mod presets;
 pub mod procmon;

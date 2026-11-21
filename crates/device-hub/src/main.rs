@@ -82,6 +82,8 @@ fn main() {
             }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
+                    // プロセス連動で上書き中のポインター設定 (加速など) を元に戻してから終わる。
+                    device_hub::pointer::release();
                     cx.quit();
                 }
             })

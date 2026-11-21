@@ -6,13 +6,24 @@
 //!   外れたら `on_leave` を適用する (procmon.rs が ~1 秒おきに評価)。
 
 use crate::app::Shell;
-use crate::prefs::SavedProfile;
+use crate::prefs::{PointerMode, SavedProfile};
 use crate::ui::{self, Btn};
 use crate::{procmon, theme};
 use devhub_core::DeviceId;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::rc::Rc;
+
+/// 「前面になったら適用」の選択 index (0 =「なし」)。未選択なら先頭のプロファイル。
+fn fg_default(sel: usize, len: usize) -> usize {
+    if len <= 1 {
+        0
+    } else if sel == usize::MAX {
+        1
+    } else {
+        sel.min(len - 1)
+    }
+}
 
 /// 新規プロファイル/ルール作成フォームの選択状態。
 pub struct AutoForm {
@@ -26,6 +37,8 @@ pub struct AutoForm {
     pub rule_leave: usize,
     /// 編集中のルール (Some ならフォームは更新モード)。
     pub edit_rule: Option<usize>,
+    /// ルールの Windows ポインター設定。
+    pub rule_pointer: PointerMode,
 }
 
 impl Default for AutoForm {
@@ -36,6 +49,7 @@ impl Default for AutoForm {
             rule_fg: usize::MAX,
             rule_leave: usize::MAX,
             edit_rule: None,
+            rule_pointer: PointerMode::Keep,
         }
     }
 }
@@ -509,15 +523,18 @@ impl Shell {
                 .find(|(id, _)| id.0 == rule.device)
                 .map(|(_, n)| n.clone())
                 .unwrap_or_else(|| rule.device.clone());
-            let fg_name = self
-                .prefs
-                .profiles
-                .iter()
-                .find(|p| {
-                    p.name == rule.on_fg && p.devices.iter().any(|t| t.device == rule.device)
-                })
-                .map(|_| rule.on_fg.clone())
-                .unwrap_or_else(|| format!("{} (未検出)", rule.on_fg));
+            let fg_name = if rule.on_fg.is_empty() {
+                "なし".to_string()
+            } else {
+                self.prefs
+                    .profiles
+                    .iter()
+                    .find(|p| {
+                        p.name == rule.on_fg && p.devices.iter().any(|t| t.device == rule.device)
+                    })
+                    .map(|_| rule.on_fg.clone())
+                    .unwrap_or_else(|| format!("{} (未検出)", rule.on_fg))
+            };
             let leave_name = if rule.on_leave.is_empty() {
                 "なし".to_string()
             } else {
@@ -531,9 +548,18 @@ impl Shell {
                     .map(|_| rule.on_leave.clone())
                     .unwrap_or_else(|| format!("{} (未検出)", rule.on_leave))
             };
+            let title = if rule.on_fg.is_empty() && rule.on_leave.is_empty() {
+                rule.process.clone()
+            } else {
+                format!("{} → {}", rule.process, dev_name)
+            };
+            let mut sub = format!("前面: {fg_name} / 離脱: {leave_name}");
+            if rule.pointer != PointerMode::Keep {
+                sub.push_str(&format!(" / ポインター: {}", rule.pointer.label()));
+            }
             rule_body = rule_body.child(ui::row_first(
-                format!("{} → {}", rule.process, dev_name).as_str(),
-                Some(format!("前面: {fg_name} / 離脱: {leave_name}").as_str()),
+                title.as_str(),
+                Some(sub.as_str()),
                 div()
                     .flex()
                     .items_center()
@@ -583,10 +609,15 @@ impl Shell {
                             this.auto_form.rule_leave = usize::MAX;
                             // プロファイル選択を名前から解決 (form の index に合わせる)。
                             let dev_idx = this.auto_form.rule_dev.min(devs.len().saturating_sub(1));
-                            let fg_items = this.profile_names(dev_idx, &devs, false);
-                            if let Some(fi) = fg_items.iter().position(|n| *n == rule.on_fg) {
-                                this.auto_form.rule_fg = fi;
+                            let fg_items = this.profile_names(dev_idx, &devs, true);
+                            if rule.on_fg.is_empty() {
+                                this.auto_form.rule_fg = 0; // なし
+                            } else if let Some(fi) =
+                                fg_items.iter().skip(1).position(|n| *n == rule.on_fg)
+                            {
+                                this.auto_form.rule_fg = fi + 1;
                             }
+                            this.auto_form.rule_pointer = rule.pointer;
                             let leave_items = this.profile_names(dev_idx, &devs, true);
                             if let Some(li) = leave_items.iter().position(|n| *n == rule.on_leave) {
                                 this.auto_form.rule_leave = li;
@@ -623,16 +654,11 @@ impl Shell {
             .auto_form
             .rule_dev
             .min(dev_names.len().saturating_sub(1));
-        let fg_items = self.profile_names(rule_dev_sel, &devs, false);
+        let fg_items = self.profile_names(rule_dev_sel, &devs, true);
         let leave_items = self.profile_names(rule_dev_sel, &devs, true);
-        // 未選択 (usize::MAX) の既定: on_fg = 先頭のプロファイル、on_leave = なし(0)。
-        let fg_sel = if fg_items.is_empty() {
-            usize::MAX
-        } else if self.auto_form.rule_fg == usize::MAX {
-            0
-        } else {
-            self.auto_form.rule_fg.min(fg_items.len() - 1)
-        };
+        // 未選択 (usize::MAX) の既定: on_fg = 先頭のプロファイル (無ければ「なし」)、
+        // on_leave = なし(0)。
+        let fg_sel = fg_default(self.auto_form.rule_fg, fg_items.len());
         let leave_sel = if leave_items.is_empty() || self.auto_form.rule_leave == usize::MAX {
             0
         } else {
@@ -744,6 +770,23 @@ impl Shell {
                     }),
                 )),
             ))
+            .child(ui::row(
+                "Windows のポインター",
+                Some("前面の間だけ変更し、外れたら元に戻します (レジストリには書きません)"),
+                div().child(chips_row(
+                    "rule-pointer",
+                    &PointerMode::ALL.map(|m| m.label().to_string()),
+                    PointerMode::ALL
+                        .iter()
+                        .position(|m| *m == self.auto_form.rule_pointer)
+                        .unwrap_or(0),
+                    cx,
+                    Rc::new(|this, i, cx| {
+                        this.auto_form.rule_pointer = PointerMode::ALL[i.min(2)];
+                        cx.notify();
+                    }),
+                )),
+            ))
             .child(ui::row_first(
                 if editing.is_some() {
                     "ルールを更新"
@@ -766,18 +809,32 @@ impl Shell {
                             }
                             let devs = dev_list(this);
                             let dev_idx = this.auto_form.rule_dev.min(devs.len().saturating_sub(1));
-                            let Some((id, _)) = devs.get(dev_idx) else {
-                                return;
+                            let pointer = this.auto_form.rule_pointer;
+                            // ポインターだけのルールはデバイス無しでも作れる。
+                            let device = devs.get(dev_idx).map(|(id, _)| id.0.clone());
+                            let fg_items = this.profile_names(dev_idx, &devs, true);
+                            let fg_sel = fg_default(this.auto_form.rule_fg, fg_items.len());
+                            let on_fg = if fg_sel == 0 {
+                                String::new()
+                            } else {
+                                fg_items[fg_sel].clone()
                             };
-                            let fg_items = this.profile_names(dev_idx, &devs, false);
-                            if fg_items.is_empty() {
-                                this.toast("先にプロファイルを作成してください", true, cx);
+                            if on_fg.is_empty() && pointer == PointerMode::Keep {
+                                this.toast(
+                                    if fg_items.len() <= 1 {
+                                        "先にプロファイルを作成するか、ポインター設定を選んでください"
+                                    } else {
+                                        "適用するプロファイルかポインター設定を選んでください"
+                                    },
+                                    true,
+                                    cx,
+                                );
                                 return;
                             }
-                            let fg_sel = if this.auto_form.rule_fg == usize::MAX {
-                                0
-                            } else {
-                                this.auto_form.rule_fg.min(fg_items.len() - 1)
+                            let device = match device {
+                                Some(d) => d,
+                                None if on_fg.is_empty() => String::new(),
+                                None => return,
                             };
                             let leave_items = this.profile_names(dev_idx, &devs, true);
                             let leave_sel = if this.auto_form.rule_leave == usize::MAX {
@@ -787,7 +844,6 @@ impl Shell {
                                     .rule_leave
                                     .min(leave_items.len().saturating_sub(1))
                             };
-                            let on_fg = fg_items[fg_sel].clone();
                             let on_leave = if leave_items.is_empty() || leave_sel == 0 {
                                 String::new()
                             } else {
@@ -796,20 +852,23 @@ impl Shell {
                             if let Some(ei) = this.auto_form.edit_rule {
                                 if let Some(r) = this.prefs.proc_rules.get_mut(ei) {
                                     r.process = proc;
-                                    r.device = id.0.clone();
+                                    r.device = device;
                                     r.on_fg = on_fg;
                                     r.on_leave = on_leave;
+                                    r.pointer = pointer;
                                 }
                                 this.auto_form.edit_rule = None;
                             } else {
                                 this.prefs.proc_rules.push(crate::prefs::ProcRule {
                                     process: proc,
-                                    device: id.0.clone(),
+                                    device,
                                     on_fg,
                                     on_leave,
                                     enabled: true,
+                                    pointer,
                                 });
                             }
+                            this.auto_form.rule_pointer = PointerMode::Keep;
                             this.prefs.save();
                             this.set_input("auto-proc-name", "", w, cx);
                             cx.notify();

@@ -128,6 +128,33 @@ pub struct ProcRule {
     /// 無効にすると評価しない (適用中に OFF なら on_leave が走る)。
     #[serde(default = "proc_rule_enabled")]
     pub enabled: bool,
+    /// 前面の間だけ Windows のポインター設定を変える (外れたら元に戻す)。
+    #[serde(default)]
+    pub pointer: PointerMode,
+}
+
+/// プロセス連動で切り替える Windows のポインター設定。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PointerMode {
+    /// 変更しない。
+    #[default]
+    Keep,
+    /// 「ポインターの精度を高める」(加速) をオフ。速度はそのまま。
+    AccelOff,
+    /// 加速オフ + 速度を標準 (10) に — マウスの移動量と画面の移動量が 1:1。
+    Raw,
+}
+
+impl PointerMode {
+    pub const ALL: [PointerMode; 3] = [PointerMode::Keep, PointerMode::AccelOff, PointerMode::Raw];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PointerMode::Keep => "変更しない",
+            PointerMode::AccelOff => "加速オフ",
+            PointerMode::Raw => "加速オフ + 速度 1:1",
+        }
+    }
 }
 
 fn proc_rule_enabled() -> bool {
