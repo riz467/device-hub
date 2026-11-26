@@ -17,11 +17,15 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use device_hub::app::{clear_component_chrome, Shell};
-use device_hub::{prefs::Prefs, theme};
+use device_hub::{prefs::Prefs, theme, tray};
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 
 fn main() {
+    // 常駐するので 2 つ目は起動しない (既存の窓を前に出して終わる)。
+    if !tray::claim_single_instance() {
+        return;
+    }
     device_hub::rawinput::start(); // 実測ポーリングレート計測 (Raw Input)
     // USB 計測ワーカーの診断ログ — 未設定なら %TEMP% に既定で出す
     // (切断の OS コード採取用。ワーカー遷移のみで容量は微小)。
@@ -71,11 +75,23 @@ fn main() {
             }
 
             gpui_kit::open_window(options, cx, |window, cx| {
+                // × で閉じずにトレイへ。アイコンを出せなかったときだけ通常どおり終了する
+                // (見えない窓だけが残って戻せなくなるのを防ぐ)。
+                tray::set_main_window(tray::hwnd_of(window));
+                let in_tray = tray::start();
+                window.on_window_should_close(cx, move |_, _| {
+                    if !in_tray || tray::quitting() {
+                        return true;
+                    }
+                    tray::hide_main();
+                    false
+                });
                 cx.new(|cx| Shell::new(window, cx))
             })
             .expect("failed to open window");
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
+                    tray::remove_icon();
                     cx.quit();
                 }
             })
