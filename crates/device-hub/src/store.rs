@@ -450,6 +450,17 @@ impl Hub {
         }
     }
 
+    /// 休眠中のセッションだけ電池を取りに行く (= 覚醒の確認)。scan と同じ 2 秒周期で呼ぶ。
+    /// ドライバの覚醒通知を取りこぼしても、応答が返った時点で asleep が解ける。
+    pub fn poll_asleep(&self) {
+        for s in self.sessions.values() {
+            // ready() は見ない — 寝たまま起動して状態を読めていないセッションも覚醒を拾う。
+            if s.info.asleep {
+                let _ = s.tx.send(Job::Battery);
+            }
+        }
+    }
+
     pub fn poll_battery(&self) {
         for s in self.sessions.values() {
             let has_battery = s.caps.as_ref().is_some_and(|c| c.battery);
@@ -1049,6 +1060,18 @@ fn worker(
             }
         }
         for job in kept {
+            // 休眠中の書き込み/読み込みで Disconnected になるとハンドルを捨てる (driver = None)。
+            // そのままだとドライバの覚醒通知スレッドも止まり、再起動まで asleep が解けない —
+            // Open 以外のジョブが来たら開き直す (寝ていても開けるドライバは通知を張り直す)。
+            if driver.is_none() && !matches!(job, Job::Open) {
+                if let Ok(d) = backend.driver(&id) {
+                    if vidpid.is_none() {
+                        let i = d.info();
+                        vidpid = Some((i.vid, i.pid));
+                    }
+                    driver = Some(d);
+                }
+            }
             let ok = match job {
                 Job::Open => match backend.driver(&id) {
                     Ok(d) => {

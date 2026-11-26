@@ -499,8 +499,12 @@ fn feat_index(sh: &Shared, id: u16) -> Option<u8> {
 fn fcall(sh: &Shared, id: u16, func: u8, params: &[u8]) -> HubResult<Vec<u8>> {
     let i = feat_index(sh, id).ok_or(HubError::Unsupported("この機種に無い HID++ 機能"))?;
     let r = call(sh, i, func, params);
-    if matches!(r, Err(HubError::Disconnected)) {
-        set_asleep(sh, true);
+    match &r {
+        Err(HubError::Disconnected) => set_asleep(sh, true),
+        // 応答が返った = 起きている。覚醒通知 (0x41/1D4B) を取りこぼしても
+        // 定期の電池取得などで asleep が解ける (変化時だけ Info を送る)。
+        Ok(_) => set_asleep(sh, false),
+        Err(_) => {}
     }
     r
 }
@@ -1081,6 +1085,9 @@ impl DeviceDriver for LogitechDriver {
     }
 
     fn battery(&self) -> HubResult<Battery> {
+        // 寝ている間に開いたドライバは機能表が空 — ここで列挙し直さないと
+        // 電池取得が Unsupported で即終わり、本体に一度も問い合わせない (= asleep が解けない)。
+        self.ensure_detected()?;
         if feat_index(&self.sh, feat::UNIFIED_BATTERY).is_some() {
             // getStatus → [残量%, level, 充電状態 (0 放電 / 1・2 充電中 / 3 満充電), …]
             let r = fcall(&self.sh, feat::UNIFIED_BATTERY, 1, &[])?;

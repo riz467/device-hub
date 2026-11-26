@@ -506,6 +506,8 @@ impl Shell {
                         this.hub.scan();
                         if ticks.is_multiple_of(15) {
                             this.hub.poll_battery();
+                        } else {
+                            this.hub.poll_asleep();
                         }
                         this.mem_tick();
                     })
