@@ -265,6 +265,23 @@ pub const KNOWN: &[KnownDevice] = &[
         driver: DriverKind::Lamzu,
         verified: false,
     },
+    // ---------------------------------------------------------------- Logicool (HID++ 2.0)
+    // LIGHTSPEED 受信機 — 実機列挙: 046d:c547 if=2 up=FF00 u=02 (HID++ long, report 0x11)。
+    // ペア先 (PRO X SUPERLIGHT = 無線 PID 0x4093) の機能は FeatureSet の自己申告から組み立てる
+    // (docs/LOGITECH_PROX_SUPERLIGHT.md)。表示名はドライバが DeviceName で差し替える。
+    KnownDevice {
+        vid: 0x046D,
+        pid: 0xC547,
+        usage_page: Some(0xFF00),
+        usage: Some(0x02),
+        kind: DeviceKind::Mouse,
+        vendor: "Logicool",
+        model: "logi-lightspeed",
+        name: "Logicool LIGHTSPEED レシーバー",
+        transport: Transport::Wireless24G,
+        driver: DriverKind::Logitech,
+        verified: true,
+    },
 ];
 
 /// 列挙結果 (VID/PID/usage) に合う既知デバイス。`0xFFFF` のプレースホルダは一致しない。

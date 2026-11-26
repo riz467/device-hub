@@ -72,6 +72,8 @@ pub enum DriverKind {
     Atk,
     /// www.lamzu.net / Aurora 系 (64B feature report、if2 FFFF:00)。
     Lamzu,
+    /// Logicool / Logitech HID++ 2.0 (LIGHTSPEED 受信機 if2 FF00:02)。機能は本体の自己申告から組み立てる。
+    Logitech,
     /// 未割り当て (検出だけできる)。
     Unsupported,
 }
